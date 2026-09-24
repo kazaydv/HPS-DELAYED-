@@ -13,7 +13,7 @@
 <script>
 window.LP_CONFIG = {
   META_PIXEL_ID : '',        // ← आफ्नो Meta Pixel ID यहाँ राख्नुहोस्, e.g. '123456789012345'
-  SCRIPT_URL    : 'https://script.google.com/macros/s/AKfycbyuAsrp3_aXbKvvWMl5_0PcuuztVQ-lfgcMMpJ1UKTBExvnK09oKD-jNkvbWaGSya9ZTQ/exec',        // ← Apps Script Web App URL (…/exec) यहाँ राख्नुहोस्
+  SCRIPT_URL    : 'https://script.google.com/macros/s/AKfycbxBp0ls-b1pQgX3xr9HKlw8qE7laARZNWzRJPSzO95Ajy5aFfyWwTB6NjHhLyv8BbLWCw/exec',        // ← Apps Script Web App URL (…/exec) यहाँ राख्नुहोस्
   CURRENCY      : 'NPR',     // value sent to Meta with every event
   PRODUCT_ID    : 'himbuti-piles-spray-60ml',
   PRODUCT_NAME  : 'Himbuti Herbal Piles Spray 60ml',
@@ -650,7 +650,7 @@ try{
         <div class="err">कृपया पूरा ठेगाना लेख्नुहोस् (जिल्ला र ठाउँ)</div>
       </div>
 
-      <div class="om-hp" aria-hidden="true"><label>Website<input type="text" name="website" id="omHp" tabindex="-1" autocomplete="off"></label></div>
+      <div class="om-hp" aria-hidden="true"><label>Website<input type="text" name="om_hp_field" id="omHp" tabindex="-1" autocomplete="new-password" value=""></label></div>
 
       <div class="om-fail" id="omFail">अर्डर पठाउन सकिएन। इन्टरनेट जाँचेर फेरि प्रयास गर्नुहोस्, वा <a id="omWa" href="#" target="_blank" rel="noopener">WhatsApp बाट अर्डर पठाउनुहोस्</a>।<small id="omWhy" class="om-why"></small></div>
 
@@ -807,7 +807,7 @@ try{
   /* ---------- submit ---------- */
   var SCRIPT_URL = String(C.SCRIPT_URL || '').trim();
 
-  // 1st try: normal POST and read the JSON reply
+  // 1st try: POST the FormData and read the JSON reply
   function postJSON(body){
     var ctl = window.AbortController ? new AbortController() : null;
     var t = ctl ? setTimeout(function(){ ctl.abort(); }, 15000) : null;
@@ -873,7 +873,6 @@ try{
     if (sending) return;
     $('omFail').style.display = 'none';
     var v = check(); if (!v) return;
-    if ($('omHp').value) { done(v, true); return; }            // bot filled the hidden field → pretend OK, send nothing
     if (!orderId) orderId = newOrderId();
     var p = PKGS[cur];
     var data = {
@@ -881,7 +880,7 @@ try{
       package: p.label, qty: p.qty, price: p.price, currency: C.CURRENCY || 'NPR',
       page: location.href.split('#')[0].slice(0, 400), referrer: document.referrer.slice(0, 300),
       fbp: cookie('_fbp'), fbc: cookie('_fbc') || (attr.fbclid ? 'fb.1.' + Date.now() + '.' + attr.fbclid : ''),
-      event_id: orderId, user_agent: navigator.userAgent.slice(0, 250)
+      event_id: orderId, user_agent: navigator.userAgent.slice(0, 250), hp: $('omHp').value ? '1' : ''
     };
     ATTR.forEach(function(k){ data[k] = attr[k] || ''; });
 
@@ -889,10 +888,17 @@ try{
     if (!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec(\?.*)?$/.test(SCRIPT_URL)) return waFallback(v, new Error('bad_url'));
 
     sending = true; $('omGo').disabled = true; $('omGoTxt').textContent = 'पठाउँदै…';
-    postJSON(new URLSearchParams(data))
+    // FormData built from the form itself, plus the order/tracking fields
+    var fd = new FormData(form);
+    fd.delete('pkg'); fd.delete('om_hp_field');
+    Object.keys(data).forEach(function(k){ fd.set(k, data[k]); });
+    postJSON(fd)
       .catch(function(err){ if (err && err.transport) return jsonp(data); throw err; })
       .then(function(res){
-        if (res && res.ok) return done(v);
+        if (res && res.ok) {
+          console.info('[Order form] saved →', res.spreadsheet ? res.spreadsheet + ' › tab "' + res.tab + '" › row ' + res.row + '  ' + res.sheet_url : res);
+          return done(v);
+        }
         var code = res && res.error;
         if (FIELD_ERR[code]) { field(FIELD_ERR[code], false); return; }   // server rejected a field → show it on the field
         throw new Error(code || 'rejected');
