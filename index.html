@@ -11,9 +11,9 @@
      ORDER FORM + META PIXEL SETTINGS  (edit only these 2-3 lines)
      ===================================================================== -->
 <script>
-window.LP_CONFIG = {
+window.LP_CONFIG = {'https://script.google.com/macros/s/AKfycbyuAsrp3_aXbKvvWMl5_0PcuuztVQ-lfgcMMpJ1UKTBExvnK09oKD-jNkvbWaGSya9ZTQ/exec'}
   META_PIXEL_ID : '',        // ← आफ्नो Meta Pixel ID यहाँ राख्नुहोस्, e.g. '123456789012345'
-  SCRIPT_URL    : 'https://script.google.com/macros/s/AKfycbwsuUTodiKnzhQgTzjGBlp8h1So-8KZ673Lrmcw98QCuKNbAYw_UNUaYtIv3TOTz5MYhA/exec',        // ← Apps Script Web App URL (…/exec) यहाँ राख्नुहोस्
+  SCRIPT_URL    : '',        // ← Apps Script Web App URL (…/exec) यहाँ राख्नुहोस्
   CURRENCY      : 'NPR',     // value sent to Meta with every event
   PRODUCT_ID    : 'himbuti-piles-spray-60ml',
   PRODUCT_NAME  : 'Himbuti Herbal Piles Spray 60ml',
@@ -370,6 +370,8 @@ footer a{color:var(--green);}
 @keyframes omspin{to{transform:rotate(360deg);}}
 .om-note{text-align:center;font-size:.76rem;color:var(--ink-soft);margin-top:9px;}
 .om-fail{display:none;background:#F6E3DC;color:var(--rust);border-radius:8px;padding:10px 12px;font-size:.84rem;margin-bottom:10px;}
+.om-why{display:block;margin-top:6px;font-size:.72rem;color:#7a5a4f;line-height:1.5;}
+.om-why:empty{display:none;}
 .om-fail a{color:var(--green-deep);font-weight:700;}
 .om-done{display:none;text-align:center;padding:14px 4px 6px;}
 .om-done .tick{width:64px;height:64px;border-radius:50%;background:var(--green-deep);color:#fff;font-size:2rem;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;}
@@ -650,7 +652,7 @@ try{
 
       <div class="om-hp" aria-hidden="true"><label>Website<input type="text" name="website" id="omHp" tabindex="-1" autocomplete="off"></label></div>
 
-      <div class="om-fail" id="omFail">अर्डर पठाउन सकिएन। इन्टरनेट जाँचेर फेरि प्रयास गर्नुहोस्, वा <a id="omWa" href="#" target="_blank" rel="noopener">WhatsApp बाट अर्डर पठाउनुहोस्</a>।</div>
+      <div class="om-fail" id="omFail">अर्डर पठाउन सकिएन। इन्टरनेट जाँचेर फेरि प्रयास गर्नुहोस्, वा <a id="omWa" href="#" target="_blank" rel="noopener">WhatsApp बाट अर्डर पठाउनुहोस्</a>।<small id="omWhy" class="om-why"></small></div>
 
       <div class="om-sum"><span>जम्मा रकम<small>डेलिभरी निःशुल्क</small></span><b id="omTotal">Rs 2,900</b></div>
       <button type="submit" class="om-go" id="omGo"><span class="spin"></span><span id="omGoTxt">अर्डर कन्फर्म गर्नुहोस्</span></button>
@@ -803,21 +805,55 @@ try{
   }
 
   /* ---------- submit ---------- */
-  function post(url, body, noCors){
+  var SCRIPT_URL = String(C.SCRIPT_URL || '').trim();
+
+  // 1st try: normal POST and read the JSON reply
+  function postJSON(body){
     var ctl = window.AbortController ? new AbortController() : null;
     var t = ctl ? setTimeout(function(){ ctl.abort(); }, 15000) : null;
     var opt = { method: 'POST', body: body, redirect: 'follow' };
-    if (noCors) opt.mode = 'no-cors';
     if (ctl) opt.signal = ctl.signal;
-    return fetch(url, opt).then(function(r){ if (t) clearTimeout(t); return r; },
-                                function(e){ if (t) clearTimeout(t); throw e; });
+    return fetch(SCRIPT_URL, opt).then(function(r){ if (t) clearTimeout(t); return r.text(); },
+                                       function(e){ if (t) clearTimeout(t); throw e; })
+      .then(function(txt){
+        try { return JSON.parse(txt); }
+        catch (e) { var er = new Error('not_json'); er.transport = true; throw er; }
+      }, function(e){ e.transport = true; throw e; });
   }
-  function waFallback(v){
+  // 2nd try: JSONP (script tag). Works even where the browser blocks the POST reply,
+  // and it only succeeds if Code.gs really answered – so no "fake" success.
+  function jsonp(data){
+    return new Promise(function(res, rej){
+      var cb = 'omcb_' + Date.now() + Math.floor(Math.random() * 1e4);
+      var q = new URLSearchParams(data); q.set('callback', cb);
+      var sc = document.createElement('script'), t;
+      function clean(){ clearTimeout(t); window[cb] = undefined; try{ delete window[cb]; }catch(e){} sc.remove(); }
+      window[cb] = function(r){ clean(); res(r); };
+      var fail = function(){ if (!window[cb]) return; clean(); var e = new Error('blocked'); e.transport = true; rej(e); };
+      sc.onerror = fail;
+      sc.onload = function(){ setTimeout(fail, 50); };   // loaded but never called back → login page / wrong URL
+      t = setTimeout(function(){ clean(); var e = new Error('timeout'); e.transport = true; rej(e); }, 20000);
+      sc.src = SCRIPT_URL + (SCRIPT_URL.indexOf('?') < 0 ? '?' : '&') + q.toString();
+      document.head.appendChild(sc);
+    });
+  }
+
+  var FIELD_ERR = { name: 'fName', phone: 'fPhone', address: 'fAddr' };
+  function reasonText(err){
+    var m = String(err && err.message || err || '');
+    if (m === 'no_url')   return 'Setup: LP_CONFIG.SCRIPT_URL मा Apps Script को /exec URL राख्नुहोस्।';
+    if (m === 'bad_url')  return 'Setup: SCRIPT_URL गलत छ, Deploy → Web app बाट आउने …/exec URL राख्नुहोस्।';
+    if (err && err.transport) return 'Setup: Apps Script सम्म पुग्न सकिएन। Web app को "Who has access" = Anyone राखेर नयाँ Deploy गर्नुहोस्, र /exec URL नै प्रयोग गर्नुहोस्।';
+    return 'Server: ' + m;
+  }
+  function waFallback(v, err){
     var p = PKGS[cur];
     var msg = 'नमस्ते, मलाई Himbuti हर्बल पाइल्स स्प्रे अर्डर गर्नु छ।\nप्याकेज: ' + p.label + ' - Rs ' + p.price +
               '\nनाम: ' + v.name + '\nफोन: ' + v.phone + '\nठेगाना: ' + v.address + '\nअर्डर नं: ' + orderId;
     $('omWa').href = 'https://wa.me/' + C.WHATSAPP + '?text=' + encodeURIComponent(msg);
+    $('omWhy').textContent = err ? reasonText(err) : '';
     $('omFail').style.display = 'block';
+    if (err) console.warn('[Order form] not saved →', reasonText(err), err);
   }
   function done(v, isBot){
     var p = PKGS[cur];
@@ -843,31 +879,28 @@ try{
     var data = {
       order_id: orderId, name: v.name, phone: v.phone, address: v.address,
       package: p.label, qty: p.qty, price: p.price, currency: C.CURRENCY || 'NPR',
-      page: location.href.split('#')[0], referrer: document.referrer,
+      page: location.href.split('#')[0].slice(0, 400), referrer: document.referrer.slice(0, 300),
       fbp: cookie('_fbp'), fbc: cookie('_fbc') || (attr.fbclid ? 'fb.1.' + Date.now() + '.' + attr.fbclid : ''),
-      event_id: orderId, user_agent: navigator.userAgent
+      event_id: orderId, user_agent: navigator.userAgent.slice(0, 250)
     };
     ATTR.forEach(function(k){ data[k] = attr[k] || ''; });
-    var body = new URLSearchParams(data);
 
-    if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(C.SCRIPT_URL || '')) {
-      console.warn('LP_CONFIG.https://script.google.com/macros/s/AKfycbwsuUTodiKnzhQgTzjGBlp8h1So-8KZ673Lrmcw98QCuKNbAYw_UNUaYtIv3TOTz5MYhA/exec');
-      waFallback(v); return;
-    }
+    if (!SCRIPT_URL) return waFallback(v, new Error('no_url'));
+    if (!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec(\?.*)?$/.test(SCRIPT_URL)) return waFallback(v, new Error('bad_url'));
+
     sending = true; $('omGo').disabled = true; $('omGoTxt').textContent = 'पठाउँदै…';
-    post(C.SCRIPT_URL, body).then(function(r){ return r.json(); }).then(function(res){
-      if (res && res.ok) return done(v);
-      throw new Error(res && res.error || 'rejected');
-    }).catch(function(err){
-      if (err && err.name === 'TypeError') {
-        /* CORS/redirect hiccup: the row usually still reaches the sheet. Re-send blind with the SAME
-           order no. (Code.gs ignores duplicates) and treat as success. */
-        return post(C.SCRIPT_URL, body, true).then(function(){ done(v); }, function(){ waFallback(v); });
-      }
-      console.warn('Order not saved:', err); waFallback(v);
-    }).then(function(){
-      sending = false; $('omGo').disabled = false; $('omGoTxt').textContent = 'अर्डर कन्फर्म गर्नुहोस्';
-    });
+    postJSON(new URLSearchParams(data))
+      .catch(function(err){ if (err && err.transport) return jsonp(data); throw err; })
+      .then(function(res){
+        if (res && res.ok) return done(v);
+        var code = res && res.error;
+        if (FIELD_ERR[code]) { field(FIELD_ERR[code], false); return; }   // server rejected a field → show it on the field
+        throw new Error(code || 'rejected');
+      })
+      .catch(function(err){ waFallback(v, err); })
+      .then(function(){
+        sending = false; $('omGo').disabled = false; $('omGoTxt').textContent = 'अर्डर कन्फर्म गर्नुहोस्';
+      });
   });
 
   setPkg(cur, false);
